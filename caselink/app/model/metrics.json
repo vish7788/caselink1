@@ -1,0 +1,15 @@
+{
+  "trained_at": "2026-11-21",
+  "sklearn": "1.9.1",
+  "phishing_domains": 20000,
+  "benign_domains": 20000,
+  "holdout_size": 8000,
+  "holdout_auc": 0.9051,
+  "holdout_precision_at_0.5": 0.8428,
+  "holdout_recall_at_0.5": 0.8065,
+  "sources": {
+    "phishing": "https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/master/phishing-links-ACTIVE.txt",
+    "benign": "https://raw.githubusercontent.com/zer0h/top-1000000-domains/master/top-100000-domains"
+  },
+  "caveat": "Benign set is popular sites, so the model separates 'unusual new-looking domains' from 'well-known domains'. Treat as a supporting signal."
+}

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CaseLink</title>
+<style>
+:root{--ink:#0F1B2D;--paper:#F5F3EE;--panel:#fff;--line:#DDD8CC;--teal:#0B7A70;--amber:#F2A541;--bad:#C0392B;--warn:#B9770E;--ok:#1E8449;--mute:#4A5568}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--paper);color:var(--ink)}
+header{background:var(--ink);color:var(--paper);padding:18px 28px;display:flex;align-items:center;gap:20px}
+header h1{margin:0;font-size:24px}header p{margin:0;color:#C5D0DE;flex:1}
+main{max-width:1180px;margin:24px auto;padding:0 20px;display:grid;gap:20px;grid-template-columns:1fr 1fr}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+section.wide{grid-column:1/-1}
+h2{margin:0 0 12px;font-size:18px}
+textarea{width:100%;min-height:110px;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit;resize:vertical}
+button,.btn{background:var(--teal);color:#fff;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+button.alt{background:var(--amber);color:var(--ink)}
+button:disabled{opacity:.5}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.badge{display:inline-block;padding:3px 12px;border-radius:12px;color:#fff;font-weight:700;font-size:13px}
+.malicious{background:var(--bad)}.suspicious{background:var(--warn)}.low_risk{background:var(--ok)}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+tr.pick{cursor:pointer}tr.pick:hover{background:#F1EFE8}
+ul{margin:6px 0 0;padding-left:20px}
+.mute{color:var(--mute);font-size:13px}
+.chip{display:inline-block;background:#E8F6F4;border:1px solid #BFE5E0;border-radius:6px;padding:1px 8px;margin:2px 4px 2px 0;font-size:13px;word-break:break-all}
+.cluster{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+#graph{width:100%;height:460px;border:1px solid var(--line);border-radius:10px;background:#FBFAF7}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>CaseLink</h1>
+  <p>Complaint in, case file and gang view out.</p>
+  <button class="alt" id="demo">Load demo data</button>
+</header>
+<main>
+  <section>
+    <h2>1. Submit a complaint</h2>
+    <textarea id="text" placeholder="Paste the victim's message, link, UPI ID or phone number..."></textarea>
+    <div class="row"><button id="analyze">Analyse text</button></div>
+    <div class="row"><input type="file" id="apk" accept=".apk,.zip"><button id="analyzeApk">Analyse APK</button></div>
+    <div class="row"><input type="file" id="shot" accept="image/*"><button id="analyzeShot">Analyse screenshot</button></div>
+    <div class="row"><label><input type="checkbox" id="live"> Live checks: domain age and page inspection</label></div>
+    <p class="mute">APKs are inspected statically and never executed. Screenshot text is read by OCR and placed in the box above so you can correct it and re-run.</p>
+  </section>
+  <section>
+    <h2>2. Result</h2>
+    <div id="result" class="mute">Submit a complaint to see the verdict.</div>
+  </section>
+  <section class="wide">
+    <h2>3. Gang clusters</h2>
+    <p class="mute">Complaints that share a domain, UPI ID, phone, IP, Telegram bot or APK are grouped automatically. Act on the highest-count identifiers first.</p>
+    <div id="clusters" class="mute">No clusters yet.</div>
+    <svg id="graph" viewBox="0 0 1100 460"></svg>
+  </section>
+  <section class="wide">
+    <h2>4. All complaints</h2>
+    <div class="row" style="margin:0 0 12px"><input type="file" id="csv" accept=".csv"><button id="importCsv">Import CSV</button><span class="mute">Columns: text, label (optional). Up to 5000 rows.</span></div>
+    <table id="list"><thead><tr><th>#</th><th>Complaint</th><th>Type</th><th>Verdict</th><th>Score</th><th>Received (UTC)</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? (e.className = v) : e.setAttribute(k, v);
+  for (const k of kids) e.append(k);
+  return e;
+}
+const badge = (v) => el("span", { class: "badge " + v }, v.replace("_", " ").toUpperCase());
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+function chips(items) { return items.map((i) => el("span", { class: "chip" }, i)); }
+
+function showResult(d) {
+  const box = $("result"); box.className = ""; box.replaceChildren();
+  box.append(el("div", {}, badge(d.verdict), " ", el("b", {}, ` Risk score ${d.score}/100`)));
+  box.append(el("p", { class: "mute" }, `Complaint #${d.id}`));
+  const why = el("ul");
+  (d.reasons.length ? d.reasons : [{ text: "No risk signals found", points: 0 }]).forEach((r) => why.append(el("li", {}, `${r.text} (+${r.points})`)));
+  box.append(el("b", {}, "Why it was flagged"), why);
+  const ids = d.identifiers || {};
+  const labels = { domains: "Domains", upi_ids: "UPI IDs", phones: "Phones", ips: "IPs", bots: "Telegram bots", apk_sha256: "APK hash" };
+  for (const [k, l] of Object.entries(labels)) if ((ids[k] || []).length) box.append(el("p", {}, el("b", {}, l + ": "), ...chips(ids[k])));
+  if (d.cluster) box.append(el("p", {}, el("b", {}, `Linked to ${d.cluster.size - 1} other complaint(s) in ${d.cluster.cluster_id}`)));
+  const links = el("div", { class: "row" },
+    el("a", { class: "btn", href: `/api/complaints/${d.id}/report.pdf`, target: "_blank" }, "Open PDF report"),
+    el("a", { class: "btn", href: `/api/complaints/${d.id}/report.html`, target: "_blank" }, "HTML report"));
+  box.append(links);
+}
+
+async function refresh() {
+  const [list, clusters] = await Promise.all([api("/api/complaints"), api("/api/clusters")]);
+  const tb = $("list").querySelector("tbody"); tb.replaceChildren();
+  list.forEach((c) => {
+    const tr = el("tr", { class: "pick" }, el("td", {}, String(c.id)), el("td", {}, c.label), el("td", {}, c.kind), el("td", {}, badge(c.verdict)), el("td", {}, String(c.score)), el("td", {}, c.created_at));
+    tr.onclick = async () => showResult({ ...(await api("/api/complaints/" + c.id)).result, id: c.id, cluster: (await api("/api/complaints/" + c.id)).cluster });
+    tb.append(tr);
+  });
+  const box = $("clusters"); box.className = ""; box.replaceChildren();
+  if (!clusters.length) { box.className = "mute"; box.textContent = "No clusters yet. Load the demo data or submit complaints that share a UPI ID, domain or phone number."; }
+  clusters.forEach((cl) => {
+    const rows = cl.priority_targets.map((t) => el("li", {}, `${t.type.toUpperCase()}: `, el("span", { class: "chip" }, t.value), ` in ${t.complaints} complaints`));
+    box.append(el("div", { class: "cluster" },
+      el("b", {}, `${cl.cluster_id} · ${cl.size} complaints · max risk ${cl.max_score}`),
+      el("div", { class: "mute" }, "Act first on:"), el("ul", {}, ...rows)));
+  });
+  drawGraph(await api("/api/graph"));
+}
+
+function drawGraph(g) {
+  const svg = $("graph"); svg.replaceChildren();
+  if (!g.nodes.length) return;
+  const W = 1100, H = 460, N = g.nodes.length;
+  const pos = {}; g.nodes.forEach((n, i) => { const a = (i / N) * 6.283; pos[n.id] = { x: W / 2 + Math.cos(a) * 200, y: H / 2 + Math.sin(a) * 150, vx: 0, vy: 0 }; });
+  for (let it = 0; it < 260; it++) {
+    for (const a of g.nodes) for (const b of g.nodes) if (a.id < b.id) {
+      const p = pos[a.id], q = pos[b.id]; let dx = p.x - q.x, dy = p.y - q.y, d2 = dx * dx + dy * dy + 0.1, f = 2600 / d2, d = Math.sqrt(d2);
+      p.vx += (dx / d) * f; p.vy += (dy / d) * f; q.vx -= (dx / d) * f; q.vy -= (dy / d) * f;
+    }
+    for (const e of g.edges) {
+      const p = pos[e.source], q = pos[e.target]; const dx = q.x - p.x, dy = q.y - p.y, d = Math.sqrt(dx * dx + dy * dy) + 0.1, f = (d - 90) * 0.02;
+      p.vx += (dx / d) * f * 10; p.vy += (dy / d) * f * 10; q.vx -= (dx / d) * f * 10; q.vy -= (dy / d) * f * 10;
+    }
+    for (const n of g.nodes) { const p = pos[n.id]; p.vx += (W / 2 - p.x) * 0.002; p.vy += (H / 2 - p.y) * 0.002;
+      p.x = Math.min(W - 60, Math.max(60, p.x + p.vx * 0.05)); p.y = Math.min(H - 20, Math.max(20, p.y + p.vy * 0.05)); p.vx *= 0.8; p.vy *= 0.8; }
+  }
+  const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e; };
+  g.edges.forEach((e) => svg.append(mk("line", { x1: pos[e.source].x, y1: pos[e.source].y, x2: pos[e.target].x, y2: pos[e.target].y, stroke: "#9AA5B1", "stroke-width": 1.5 })));
+  const col = { malicious: "#C0392B", suspicious: "#B9770E", low_risk: "#1E8449" };
+  g.nodes.forEach((n) => {
+    const p = pos[n.id];
+    if (n.type === "complaint") {
+      svg.append(mk("circle", { cx: p.x, cy: p.y, r: 13, fill: col[n.verdict] || "#555" }));
+      const t = mk("text", { x: p.x, y: p.y + 4, "text-anchor": "middle", fill: "#fff", "font-size": 11, "font-weight": 700 }); t.textContent = n.cid; svg.append(t);
+    } else {
+      svg.append(mk("rect", { x: p.x - 7, y: p.y - 7, width: 14, height: 14, fill: "#F2A541", transform: `rotate(45 ${p.x} ${p.y})` }));
+      const t = mk("text", { x: p.x, y: p.y - 14, "text-anchor": "middle", fill: "#0F1B2D", "font-size": 11 }); t.textContent = n.label.length > 26 ? n.label.slice(0, 25) + "…" : n.label; svg.append(t);
+    }
+  });
+}
+
+$("analyze").onclick = async () => {
+  const text = $("text").value; if (!text.trim()) return;
+  try { showResult(await api("/api/analyze/text", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, live: $("live").checked }) })); await refresh(); }
+  catch (e) { $("result").textContent = "Error: " + e.message; }
+};
+$("analyzeShot").onclick = async () => {
+  const f = $("shot").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { const d = await api("/api/analyze/image", { method: "POST", body: fd }); $("text").value = d.ocr_text; showResult(d); await refresh(); }
+  catch (e) { $("result").textContent = "Error: " + e.message; }
+};
+$("importCsv").onclick = async () => {
+  const f = $("csv").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { const d = await api("/api/import/csv", { method: "POST", body: fd }); $("result").textContent = `Imported ${d.imported} complaint(s), skipped ${d.skipped}. ${d.clusters} cluster(s) found.`; await refresh(); }
+  catch (e) { $("result").textContent = "Error: " + e.message; }
+};
+api("/api/health").then((h) => {
+  if (!h.features.live_checks) { $("live").disabled = true; $("live").parentElement.title = "Start the server with CASELINK_LIVE=1 to enable"; }
+  if (!h.features.screenshot_ocr) { $("analyzeShot").disabled = true; $("analyzeShot").title = "Tesseract is not installed on the server"; }
+});
+$("analyzeApk").onclick = async () => {
+  const f = $("apk").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { showResult(await api("/api/analyze/apk", { method: "POST", body: fd })); await refresh(); }
+  catch (e) { $("result").textContent = "Error: " + e.message; }
+};
+$("demo").onclick = async () => { await api("/api/demo/load", { method: "POST" }); await refresh(); };
+refresh();
+</script>
+</body>
+</html>

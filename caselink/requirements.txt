@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+networkx
+reportlab
+python-multipart
+httpx
+pytest
+scikit-learn
+scipy
+joblib
+pytesseract
+pillow
+androguard
